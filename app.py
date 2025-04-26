@@ -79,7 +79,9 @@ def get_response_from_openrouter(prompt, api_key, model="mistralai/mistral-7b-in
     try:
         response = requests.post("https://openrouter.ai/api/v1/chat/completions", headers=headers, json=data)
         response.raise_for_status()
+        st.write(f"Response status code: {response.status_code}")  # Log status code
         response_json = response.json()
+        st.write(f"Raw JSON response: {response_json}")  # Log raw response
         if "choices" in response_json and len(response_json["choices"]) > 0:
             return response_json["choices"][0]["message"]["content"].strip()
         else:
@@ -156,3 +158,4 @@ def chatbot():
 
 if __name__ == "__main__":
     chatbot()
+
