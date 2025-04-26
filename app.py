@@ -4,10 +4,8 @@ from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain.schema import Document
 from langchain.vectorstores import FAISS
 from langchain.embeddings import HuggingFaceEmbeddings
-from langchain.chains import RetrievalQA
-import re
-from fuzzywuzzy import fuzz  # For fuzzy string matching
-from fuzzywuzzy import process  # For choosing the best match
+from fuzzywuzzy import fuzz
+from fuzzywuzzy import process
 
 # ---- Settings ----
 MODEL_NAME = "mistralai/Mistral-7B-Instruct-v0.2"
@@ -71,9 +69,9 @@ def openrouter_chat(messages: list):
 def ask_mistral(question: str, context: str):
     """Formats the prompt and gets an answer from the chat API."""
 
-    prompt = f"""Answer the question based ONLY on the following context.
-    Try to be helpful even if there are minor typos or slight grammatical errors
-    in the question. Understand the user's intent.
+    prompt = f"""Answer the question in a friendly and helpful manner, using only the provided context. 
+    Avoid technical jargon and do not mention the data flow or retrieval process. 
+    If the question cannot be answered from the context, respond politely that you cannot provide an answer.
 
     {context}
 
@@ -81,7 +79,7 @@ def ask_mistral(question: str, context: str):
     Answer:"""
 
     messages = [
-        {"role": "system", "content": "You are a helpful assistant that answers ONLY using the provided context."},
+        {"role": "system", "content": "You are a helpful assistant that answers questions about institutions."},
         {"role": "user", "content": prompt},
     ]
     return openrouter_chat(messages)
@@ -93,28 +91,52 @@ def correct_text(text: str) -> str:
         "instution": "institution",
         "addres": "address",
         "phone no": "phone number",
+        "phone number": "phone number",
+        "ph.no": "phone number",
         "pincode": "pin code",
+        "pin code": "pin code",
         "email id": "email",
+        "email address": "email",
         "websitee": "website",
+        "web site": "website",
         "principal sir": "principal",
         "principal mam": "principal",
         "co-ordinator": "coordinator",
+        "coordinator": "coordinator",
         "facebook page": "facebook",
+        "facebook": "facebook",
         "insta": "instagram",
+        "instagram": "instagram",
         "youtube channel": "youtube",
+        "youtube": "youtube",
         "fund details": "funding details",
-        "mous": "memorandum of understanding",  # Full expansion
+        "funding details": "funding details",
+        "mous": "memorandum of understanding",
+        "memorandum of understanding": "memorandum of understanding",
         "course offered": "courses offered",
+        "courses offered": "courses offered",
         "how many seat": "intake",
+        "seat intake": "intake",
         "admission details": "admission",
+        "admission process": "admission",
         "placement record": "placement",
+        "placement details": "placement",
         "higher study": "higher studies",
-        "b.tech": "bachelor of technology",  # Abbreviation
-        "m.tech": "master of technology",  # Abbreviation
+        "higher studies": "higher studies",
+        "b.tech": "bachelor of technology",
+        "bachelor of technology": "bachelor of technology",
+        "m.tech": "master of technology",
+        "master of technology": "master of technology",
         "bca": "bachelor of computer applications",
+        "bachelor of computer application": "bachelor of computer applications",
         "mca": "master of computer applications",
+        "master of computer application": "master of computer applications",
         "bsc cs": "bachelor of science in computer science",
+        "bachelor of science computer science": "bachelor of science in computer science",
         "msc cs": "master of science in computer science",
+        "master of science computer science": "master of science in computer science",
+        "contact no": "contact number",
+        "contact number": "contact number"
     }
 
     words = text.split()
@@ -125,12 +147,11 @@ def correct_text(text: str) -> str:
         if word_lower in corrections:
             corrected_words.append(corrections[word_lower])
         else:
-            # Fuzzy matching for words not in the dictionary
             best_match = process.extractOne(word, corrections.keys(), scorer=fuzz.token_set_ratio)
-            if best_match and best_match[1] > 80:  # Adjust the threshold as needed
+            if best_match and best_match[1] > 80:
                 corrected_words.append(corrections[best_match[0]])
             else:
-                corrected_words.append(word)  # Keep the original word
+                corrected_words.append(word)
 
     return " ".join(corrected_words)
 
