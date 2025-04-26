@@ -2,53 +2,30 @@ import requests
 import json
 import streamlit as st
 import os
-import sqlite3  # For SQLite database
 
-# 1. Connect to the Database
-def connect_to_db(db_path):
+# 1. Load Knowledge Base from Text File
+def load_knowledge_base(file_path):
     """
-    Connects to the SQLite database.
+    Loads the knowledge base from a text file.
 
     Args:
-        db_path (str): The path to the SQLite database file.
+        file_path (str): The path to the text file.
 
     Returns:
-        sqlite3.Connection: A connection object, or None on error.
+        str: The content of the text file, or None on error.
     """
     try:
-        conn = sqlite3.connect(db_path)
-        return conn
-    except sqlite3.Error as e:
-        st.error(f"Error connecting to database: {e}")
+        with open(file_path, 'r', encoding='utf-8') as file:
+            knowledge_base = file.read()
+        return knowledge_base
+    except FileNotFoundError:
+        st.error(f"Error: File not found at {file_path}")
+        return None
+    except Exception as e:
+        st.error(f"Error reading file: {e}")
         return None
 
-# 2. Fetch Knowledge from Database
-def get_knowledge_from_db(conn, query):
-    """
-    Fetches relevant knowledge from the database based on the user query.
-    This function now attempts to find more relevant information.
-
-    Args:
-        conn (sqlite3.Connection): The database connection object.
-        query (str): The user's query.
-
-    Returns:
-        str: The fetched knowledge, or None if not found.
-    """
-    try:
-        cursor = conn.cursor()
-        # Refined query to search for the query in the description
-        cursor.execute("SELECT description FROM knowledge WHERE description LIKE ?", ('%' + query + '%',)) #changed table name
-        result = cursor.fetchone()
-        if result:
-            return result[0]
-        else:
-            return None
-    except sqlite3.Error as e:
-        st.error(f"Error fetching data from database: {e}")
-        return None
-
-# 3. Prepare Prompt with Context
+# 2. Prepare Prompt with Context
 def prepare_prompt(knowledge_base, query):
     """
     Prepares the prompt for the language model, including the relevant knowledge.
@@ -61,9 +38,8 @@ def prepare_prompt(knowledge_base, query):
         str: The formatted prompt.
     """
     prompt = f"""
-    You are a helpful chatbot.  Respond to the user's question using only the information provided below.
-    Do not provide any information that is not in the knowledge base.
-    If you cannot answer the question from the knowledge base, say you don't have enough information.
+    You are a helpful chatbot. Use the following information to answer the user's question.
+    If you don't know the answer, just say "I don't know".
 
     Knowledge Base:
     {knowledge_base}
@@ -75,7 +51,7 @@ def prepare_prompt(knowledge_base, query):
     """
     return prompt
 
-# 4. Send Request to OpenRouter API
+# 3. Send Request to OpenRouter API
 def get_response_from_openrouter(prompt, api_key, model="mistralai/mistral-7b-instruct"):
     """
     Sends a request to the OpenRouter API to get a response from the Mistral model.
@@ -119,7 +95,7 @@ def get_response_from_openrouter(prompt, api_key, model="mistralai/mistral-7b-in
         st.error(f"An unexpected error occurred: {e}")
         return None
 
-# 5. Main Chatbot Function with Streamlit Interface
+# 4. Main Chatbot Function with Streamlit Interface
 def chatbot():
     """
     Main chatbot function that loads the knowledge base, gets user input from
@@ -138,11 +114,17 @@ def chatbot():
         else:
             st.stop()
 
-    db_path = "knowledge_base.db"
-    conn = connect_to_db(db_path)
-    if conn is None:
-        st.error("Chatbot cannot start without a database connection.")
+    knowledge_base_path = "institution_descriptions.txt" # Renamed to institution_descriptions.txt
+    knowledge_base = load_knowledge_base(knowledge_base_path)
+    if knowledge_base is None:
+        st.error("Chatbot cannot start without a valid knowledge base.")
         return
+
+     # Create a dummy knowledge base file if it doesn't exist
+    if not os.path.exists(knowledge_base_path):
+        with open(knowledge_base_path, "w", encoding="utf-8") as f:
+            f.write("This is a sample knowledge base.  It can contain information about anything.")
+        st.info(f"Created a dummy knowledge base file at {knowledge_base_path}.  Please edit this file with your desired knowledge.")
 
     # Initialize chat history
     if "messages" not in st.session_state:
@@ -161,9 +143,6 @@ def chatbot():
         with st.chat_message("user"):
             st.markdown(prompt)
 
-        knowledge_base = get_knowledge_from_db(conn, prompt)
-        if not knowledge_base:
-            knowledge_base = "I'm sorry, I don't have enough information to answer your question." #changed
         response = prepare_prompt(knowledge_base, prompt)
         full_response = get_response_from_openrouter(response, api_key)
 
@@ -174,7 +153,6 @@ def chatbot():
             st.markdown(full_response)
         if not full_response:
             st.error("Failed to get a response from the chatbot.")
-    conn.close()
 
 if __name__ == "__main__":
     chatbot()
