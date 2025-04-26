@@ -7,7 +7,7 @@ import chromadb
 import openai
 from sentence_transformers import SentenceTransformer
 
-# === Setup: Fix sqlite3 for chromadb (for some systems) ===
+# === Setup sqlite3 compatibility for ChromaDB ===
 try:
     import pysqlite3
     sys.modules["sqlite3"] = sys.modules.pop("pysqlite3")
@@ -93,8 +93,8 @@ def retrieve_relevant_chunks(query, k=4):
         st.error(f"❌ Retrieval error: {e}")
         return []
 
-def ask_mistral_llm(question, context):
-    """Ask Mistral LLM using OpenRouter API."""
+def stream_mistral_llm(question, context):
+    """Stream response from Mistral LLM using OpenRouter."""
     try:
         prompt = f"""Use the following context to answer the question accurately.
 
@@ -110,11 +110,19 @@ Answer:"""
             model="mistralai/mistral-7b-instruct",
             messages=[{"role": "user", "content": prompt}],
             temperature=0.2,
+            stream=True,  # 👈 Enable streaming
         )
-        return response['choices'][0]['message']['content']
+
+        full_response = ""
+        for chunk in response:
+            if "choices" in chunk:
+                delta = chunk["choices"][0]["delta"]
+                content = delta.get("content", "")
+                full_response += content
+                yield full_response  # 👈 Yield the growing text piece by piece
     except Exception as e:
-        st.error(f"❌ LLM communication error: {e}")
-        return "⚠️ Sorry, no answer available."
+        st.error(f"❌ LLM streaming error: {e}")
+        yield "⚠️ Sorry, no answer available."
 
 # === Initialize collection ===
 collection = load_or_create_collection()
@@ -124,26 +132,50 @@ st.set_page_config(page_title="🎓 Institution Chatbot", page_icon="🎓")
 st.title("🎓 Institution Info Chatbot")
 st.markdown("Ask me anything about colleges, courses, placements, and more!")
 
-user_query = st.text_input("🔎 Ask your question:")
+# === Session state: for memory ===
+if "chat_history" not in st.session_state:
+    st.session_state.chat_history = []
+
+# === Chat input ===
+user_query = st.text_input("🔎 Ask your question:", key="user_input")
 
 if user_query:
     if not openai.api_key:
-        st.error("⚠️ OPENAI_API_KEY is missing in secrets.")
+        st.error("⚠️ OPENAI_API_KEY missing.")
     elif not collection:
         st.error("⚠️ ChromaDB collection unavailable.")
     else:
-        with st.spinner("Fetching answer..."):
+        with st.spinner("Retrieving answer..."):
             context_chunks = retrieve_relevant_chunks(user_query, k=4)
 
             if context_chunks:
                 combined_context = "\n\n".join(context_chunks)
-                answer = ask_mistral_llm(user_query, combined_context)
+                # Placeholder to update streaming text
+                response_placeholder = st.empty()
+                partial_answer = ""
 
-                st.markdown("### ✅ Answer")
-                st.success(answer)
+                # Stream the response
+                for partial in stream_mistral_llm(user_query, combined_context):
+                    partial_answer = partial
+                    response_placeholder.markdown("### ✅ Answer\n" + partial_answer)
+
+                # Save to chat history
+                st.session_state.chat_history.append({
+                    "question": user_query,
+                    "answer": partial_answer
+                })
 
                 with st.expander("📄 Source Context"):
                     for idx, chunk in enumerate(context_chunks):
                         st.markdown(f"**Chunk {idx+1}:**\n{chunk}")
+
             else:
                 st.warning("⚠️ No relevant information found.")
+
+# === Show chat history ===
+if st.session_state.chat_history:
+    st.markdown("---")
+    st.markdown("## 🕑 Previous Conversations")
+    for idx, chat in enumerate(reversed(st.session_state.chat_history), 1):
+        st.markdown(f"**{idx}. Question:** {chat['question']}")
+        st.markdown(f"**Answer:** {chat['answer']}")
