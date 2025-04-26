@@ -4,6 +4,7 @@ import streamlit as st
 import requests
 from typing import List
 import tiktoken
+import json 
 
 # ---- Settings ----
 MODEL_NAME = "mistralai/mistral-7b-instruct"
@@ -17,7 +18,9 @@ def load_text_file(file) -> str:
     return file.read().decode('utf-8')
 
 def ask_openrouter(messages: List[dict], stream=False):
-    api_key = st.secrets["OPENROUTER_API_KEY"]  # Fetch API key from secrets
+    import json  # Safe parsing
+    
+    api_key = st.secrets["OPENROUTER_API_KEY"]
     url = "https://openrouter.ai/api/v1/chat/completions"
     headers = {
         "Authorization": f"Bearer {api_key}",
@@ -42,9 +45,10 @@ def ask_openrouter(messages: List[dict], stream=False):
             decoded_line = line.decode('utf-8').replace('data: ', '')
             if decoded_line == '[DONE]':
                 break
-            content = eval(decoded_line)['choices'][0]['delta'].get('content', '')
+            content = json.loads(decoded_line)['choices'][0]['delta'].get('content', '')
             if content:
                 yield content
+
 
 def split_text_into_chunks(text, max_tokens=3000):
     tokenizer = tiktoken.encoding_for_model("gpt-3.5-turbo")
