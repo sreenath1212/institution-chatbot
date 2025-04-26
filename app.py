@@ -73,7 +73,7 @@ def get_response_from_openrouter(prompt, api_key, model="mistralai/mistral-7b-in
         "messages": [
             {"role": "user", "content": prompt}
         ],
-        "max_tokens": 9999999999999999999999999,  # Adjust as needed
+        #"max_tokens": 200,  # Adjust as needed #removed max tokens
         "temperature": 0.7, # Adjust as needed
     }
 
