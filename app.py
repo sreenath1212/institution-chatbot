@@ -39,7 +39,7 @@ def prepare_prompt(knowledge_base, query):
     """
     prompt = f"""
     You are a helpful chatbot. Use the following information to answer the user's question.
-    If you don't know the answer, just say "I don't know".
+    If you don't know the answer, just say "I don't know". 
 
     Knowledge Base:
     {knowledge_base}
