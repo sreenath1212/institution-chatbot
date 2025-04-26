@@ -1,81 +1,136 @@
+# chatbot_pro_secrets.py
+
 import streamlit as st
-import os
-import faiss
-import pickle
-from sentence_transformers import SentenceTransformer
-from openai import OpenAI
+import requests
+from typing import List
+import tiktoken
 
-# Load secrets from Streamlit
-OPENAI_API_KEY = st.secrets["OPENAI_API_KEY"]
+# ---- Settings ----
+MODEL_NAME = "mistralai/mistral-7b-instruct"
+TEMPERATURE = 0.3
+MAX_TOKENS = 8000  # Safe limit for Mistral 7B
 
-# Initialize OpenAI client
-client = OpenAI(
-    base_url="https://openrouter.ai/api/v1",
-    api_key=OPENAI_API_KEY,
-)
+# ---- Helper Functions ----
 
-# === Set up page ===
-st.set_page_config(page_title="Institution Chatbot", page_icon="🎓")
-st.title("🎓 Institution Info Chatbot")
-st.markdown("Ask me anything about colleges, courses, placements, and more!")
-
-# === Load FAISS index and documents ===
 @st.cache_resource
+def load_text_file(file) -> str:
+    return file.read().decode('utf-8')
 
-def load_faiss_data():
-    index = faiss.read_index("faiss_index.idx")
-    with open("documents.pkl", "rb") as f:
-        documents = pickle.load(f)
-    model = SentenceTransformer("all-MiniLM-L6-v2")
-    return index, documents, model
+def ask_openrouter(messages: List[dict], stream=False):
+    api_key = st.secrets["OPENROUTER_API_KEY"]  # Fetch API key from secrets
+    url = "https://openrouter.ai/api/v1/chat/completions"
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json"
+    }
+    data = {
+        "model": MODEL_NAME,
+        "messages": messages,
+        "temperature": TEMPERATURE,
+        "stream": stream
+    }
 
-index, documents, model = load_faiss_data()
-
-# === Search function ===
-def search(query, top_k=5):
-    query_embedding = model.encode([query])
-    distances, indices = index.search(query_embedding, top_k)
-    return [documents[i] for i in indices[0]]
-
-# === Ask Mistral ===
-def ask_mistral(question, context):
-    try:
-        prompt = f"""Use the following context to answer the question accurately.
-
-Context:
-{context}
-
-Question:
-{question}
-
-Answer:"""
-
-        response = client.chat.completions.create(
-            model="mistralai/mistral-7b-instruct",
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.2,
-        )
-        return response.choices[0].message.content
-    except Exception as e:
-        st.error(f"❌ Error communicating with Mistral LLM: {e}")
-        return "Sorry, I couldn't get an answer from the AI model."
-
-# === Chat Memory ===
-if "chat_history" not in st.session_state:
-    st.session_state.chat_history = []
-
-# === User Input ===
-user_query = st.text_input("\U0001F50D Ask a question:")
-if user_query:
-    context_docs = search(user_query)
-    context = "\n".join(context_docs)
-    answer = ask_mistral(user_query, context)
+    response = requests.post(url, headers=headers, json=data, stream=stream)
+    if response.status_code != 200:
+        raise Exception(f"API Error: {response.status_code} - {response.text}")
     
-    st.session_state.chat_history.append((user_query, answer))
+    if not stream:
+        return response.json()['choices'][0]['message']['content'].strip()
 
-# === Display Chat History ===
-if st.session_state.chat_history:
-    st.markdown("## 💬 Chat History")
-    for i, (q, a) in enumerate(st.session_state.chat_history):
-        st.markdown(f"**Q{i+1}:** {q}")
-        st.markdown(f"**A{i+1}:** {a}")
+    for line in response.iter_lines():
+        if line:
+            decoded_line = line.decode('utf-8').replace('data: ', '')
+            if decoded_line == '[DONE]':
+                break
+            content = eval(decoded_line)['choices'][0]['delta'].get('content', '')
+            if content:
+                yield content
+
+def split_text_into_chunks(text, max_tokens=3000):
+    tokenizer = tiktoken.encoding_for_model("gpt-3.5-turbo")
+    words = text.split()
+    chunks = []
+    current_chunk = []
+
+    current_tokens = 0
+    for word in words:
+        token_count = len(tokenizer.encode(word))
+        if current_tokens + token_count > max_tokens:
+            chunks.append(' '.join(current_chunk))
+            current_chunk = []
+            current_tokens = 0
+        current_chunk.append(word)
+        current_tokens += token_count
+
+    if current_chunk:
+        chunks.append(' '.join(current_chunk))
+    
+    return chunks
+
+# ---- Streamlit App ----
+
+def main():
+    st.set_page_config(page_title="🚀 Institution Chatbot", page_icon="🎓", layout="wide")
+
+    st.title("🎓 Institution Information Chatbot (Streamlit Cloud)")
+    st.markdown("Ask anything about the uploaded institution descriptions file!")
+
+    # Sidebar
+    with st.sidebar:
+        st.title("Settings ⚙️")
+        uploaded_file = st.file_uploader("📄 Upload Institution Descriptions (.txt)", type="txt")
+        if uploaded_file:
+            context_text = load_text_file(uploaded_file)
+            st.success("✅ File uploaded successfully!")
+        else:
+            context_text = None
+        st.divider()
+
+    # Initialize session states
+    if "chat_history" not in st.session_state:
+        st.session_state.chat_history = []
+
+    # Input
+    user_query = st.chat_input("Type your question here...")
+
+    # Display chat history
+    for chat in st.session_state.chat_history:
+        with st.chat_message(chat["role"]):
+            st.markdown(chat["content"])
+
+    # If user asks something
+    if user_query and context_text:
+        with st.chat_message("user"):
+            st.markdown(user_query)
+        
+        full_prompt = f"""You must answer based ONLY on the following text context:
+        
+{context_text}
+
+Question: {user_query}
+"""
+
+        st.session_state.chat_history.append({"role": "user", "content": user_query})
+        assistant_message = ""
+
+        with st.chat_message("assistant"):
+            placeholder = st.empty()
+            messages = [
+                {"role": "system", "content": "You are a helpful assistant answering ONLY based on the provided institution context."},
+                {"role": "user", "content": full_prompt}
+            ]
+
+            try:
+                for chunk in ask_openrouter(messages, stream=True):
+                    assistant_message += chunk
+                    placeholder.markdown(assistant_message + "▌")
+                placeholder.markdown(assistant_message)
+                st.session_state.chat_history.append({"role": "assistant", "content": assistant_message})
+            except Exception as e:
+                st.error(f"Error: {e}")
+
+    elif user_query and not context_text:
+        st.error("🚫 Please upload a .txt file first!")
+
+if __name__ == "__main__":
+    main()
