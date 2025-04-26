@@ -18,7 +18,7 @@ def load_text_file(file) -> str:
     return file.read().decode('utf-8')
 
 def ask_openrouter(messages: List[dict], stream=False):
-    import json  # Safe parsing
+    import json
     
     api_key = st.secrets["OPENROUTER_API_KEY"]
     url = "https://openrouter.ai/api/v1/chat/completions"
@@ -36,18 +36,26 @@ def ask_openrouter(messages: List[dict], stream=False):
     response = requests.post(url, headers=headers, json=data, stream=stream)
     if response.status_code != 200:
         raise Exception(f"API Error: {response.status_code} - {response.text}")
-    
-    if not stream:
-        return response.json()['choices'][0]['message']['content'].strip()
 
+    if not stream:
+        try:
+            return response.json()['choices'][0]['message']['content'].strip()
+        except Exception as e:
+            raise Exception(f"Empty or invalid response: {response.text}")
+    
+    # Streaming mode
     for line in response.iter_lines():
         if line:
             decoded_line = line.decode('utf-8').replace('data: ', '')
             if decoded_line == '[DONE]':
                 break
-            content = json.loads(decoded_line)['choices'][0]['delta'].get('content', '')
-            if content:
-                yield content
+            try:
+                content = json.loads(decoded_line)['choices'][0]['delta'].get('content', '')
+                if content:
+                    yield content
+            except json.JSONDecodeError:
+                st.error("Invalid stream chunk received.")
+                continue
 
 
 def split_text_into_chunks(text, max_tokens=3000):
