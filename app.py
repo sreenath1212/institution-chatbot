@@ -2,6 +2,10 @@ import os
 import re
 import sys
 import streamlit as st
+
+# === Always FIRST Streamlit command ===
+st.set_page_config(page_title="Institution Chatbot", page_icon="🎓")
+
 import faiss
 import openai
 import numpy as np
@@ -77,7 +81,6 @@ Answer:"""
         return "Sorry, I couldn't get an answer from the AI model."
 
 # === Streamlit UI ===
-st.set_page_config(page_title="Institution Chatbot", page_icon="🎓")
 st.title("🎓 Institution Info Chatbot")
 st.markdown("Ask me anything about colleges, courses, placements, and more!")
 
