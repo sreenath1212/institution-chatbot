@@ -1,111 +1,100 @@
-import streamlit as st
+# === Imports ===
 import os
 import re
 import sys
+import streamlit as st
 import chromadb
-from sentence_transformers import SentenceTransformer
 import openai
+from sentence_transformers import SentenceTransformer
 
-# Try to import and potentially replace the system sqlite3 with pysqlite3
+# === Setup: Fix sqlite3 for chromadb (for some systems) ===
 try:
     import pysqlite3
     sys.modules["sqlite3"] = sys.modules.pop("pysqlite3")
-    print("✅ Successfully replaced system sqlite3 with pysqlite3")
+    print("✅ Using pysqlite3 for sqlite3.")
 except ImportError:
-    print("⚠️ pysqlite3 not found, using system sqlite3")
+    print("⚠️ pysqlite3 not found, using system sqlite3.")
 
-# === OpenRouter API Setup ===
+# === Constants ===
+CHROMA_COLLECTION_NAME = "institutions"
+CHROMA_PERSIST_DIR = "./chroma_db"
+EMBEDDING_MODEL_NAME = "all-MiniLM-L6-v2"
+DATA_FILE = "institution_descriptions.txt"
+
+# === Initialize Clients ===
 openai.api_key = st.secrets.get("OPENAI_API_KEY")
 openai.api_base = "https://openrouter.ai/api/v1"
 
-# === ChromaDB Configuration ===
-CHROMA_COLLECTION_NAME = "institutions"
-CHROMA_PERSIST_DIR = "./chroma_db"  # Optional: For persistent storage
-
-# === Initialize ChromaDB client ===
 try:
     chroma_client = chromadb.Client(
         settings=chromadb.Settings(
             chroma_db_impl="duckdb+parquet",
-            persist_directory=CHROMA_PERSIST_DIR  # Enable persistent storage
+            persist_directory=CHROMA_PERSIST_DIR,
         )
     )
 except Exception as e:
-    st.error(f"❌ Error initializing ChromaDB client: {e}")
+    st.error(f"❌ Error initializing ChromaDB: {e}")
     st.stop()
 
-# === Load embedding model ===
 try:
-    embedder = SentenceTransformer("all-MiniLM-L6-v2")
-    print("✅ SentenceTransformer model loaded.")
+    embedder = SentenceTransformer(EMBEDDING_MODEL_NAME)
+    print(f"✅ Loaded embedding model: {EMBEDDING_MODEL_NAME}")
 except Exception as e:
-    st.error(f"❌ Error loading SentenceTransformer model: {e}")
+    st.error(f"❌ Error loading embedding model: {e}")
     st.stop()
 
-# === Function to load and process data if the collection is empty ===
-def load_and_embed_data():
-    try:
-        collection = chroma_client.get_collection(name=CHROMA_COLLECTION_NAME)
-        if collection.count() > 0:
-            print(f"✅ Collection '{CHROMA_COLLECTION_NAME}' already exists and has data.")
-            return collection
-    except:
-        print(f"⚠️ Collection '{CHROMA_COLLECTION_NAME}' not found, creating and embedding data.")
+# === Functions ===
 
+def load_or_create_collection():
+    """Load existing collection or create new one if missing."""
+    if not embedder:
+        st.error("❌ Embedding model not available.")
+        return None
+    
     try:
-        with open("institution_descriptions.txt", "r", encoding="utf-8") as file:
+        collection = chroma_client.get_collection(CHROMA_COLLECTION_NAME)
+        if collection.count() > 0:
+            print(f"✅ Collection '{CHROMA_COLLECTION_NAME}' loaded with {collection.count()} documents.")
+            return collection
+    except Exception:
+        print(f"⚠️ Collection '{CHROMA_COLLECTION_NAME}' not found. Creating new one.")
+    
+    # Load and split data
+    try:
+        with open(DATA_FILE, "r", encoding="utf-8") as file:
             raw_text = file.read()
     except FileNotFoundError:
-        st.error("❌ Error: 'institution_descriptions.txt' not found. Please upload it to the same directory.")
+        st.error(f"❌ File '{DATA_FILE}' not found.")
         return None
 
-    chunks = [block.strip() for block in re.split(r"-{5,}", raw_text) if len(block.strip()) > 50]
-
-    documents = []
-    metadatas = []
-    ids = []
-    for i, chunk in enumerate(chunks):
-        documents.append(chunk)
-        metadatas.append({"source": f"chunk_{i}"})
-        ids.append(f"inst_{i}")
-
+    chunks = [chunk.strip() for chunk in re.split(r"-{5,}", raw_text) if len(chunk.strip()) > 50]
+    documents = [chunk for chunk in chunks]
+    metadatas = [{"source": f"chunk_{i}"} for i in range(len(chunks))]
+    ids = [f"inst_{i}" for i in range(len(chunks))]
     embeddings = embedder.encode(documents).tolist()
 
     try:
-        collection = chroma_client.get_or_create_collection(name=CHROMA_COLLECTION_NAME)
-        collection.add(
-            embeddings=embeddings,
-            documents=documents,
-            metadatas=metadatas,
-            ids=ids
-        )
-        print(f"✅ Successfully embedded and stored {len(chunks)} chunks into ChromaDB.")
+        collection = chroma_client.get_or_create_collection(CHROMA_COLLECTION_NAME)
+        collection.add(embeddings=embeddings, documents=documents, metadatas=metadatas, ids=ids)
+        chroma_client.persist()  # Save to disk
+        print(f"✅ Stored {len(documents)} documents in ChromaDB.")
         return collection
     except Exception as e:
-        st.error(f"❌ Error adding data to ChromaDB: {e}")
+        st.error(f"❌ Failed to create collection: {e}")
         return None
 
-# === Load or create the ChromaDB collection ===
-collection = load_and_embed_data()
-
-# === Helper: Get top k chunks ===
-def get_chunks(query, k=4):
-    if collection:
-        try:
-            query_embedding = embedder.encode(query).tolist()
-            results = collection.query(query_embeddings=[query_embedding], n_results=k)
-            if results and results["documents"] and len(results["documents"]) > 0:
-                return results["documents"][0]
-            else:
-                return []
-        except Exception as e:
-            st.error(f"❌ Error retrieving chunks from ChromaDB: {e}")
-            return []
-    else:
+def retrieve_relevant_chunks(query, k=4):
+    """Retrieve top-k relevant documents from ChromaDB."""
+    try:
+        query_embedding = embedder.encode(query).tolist()
+        results = collection.query(query_embeddings=[query_embedding], n_results=k)
+        return results["documents"][0] if results and results["documents"] else []
+    except Exception as e:
+        st.error(f"❌ Retrieval error: {e}")
         return []
 
-# === Helper: Ask Mistral LLM ===
-def ask_mistral(question, context):
+def ask_mistral_llm(question, context):
+    """Ask Mistral LLM using OpenRouter API."""
     try:
         prompt = f"""Use the following context to answer the question accurately.
 
@@ -120,39 +109,41 @@ Answer:"""
         response = openai.ChatCompletion.create(
             model="mistralai/mistral-7b-instruct",
             messages=[{"role": "user", "content": prompt}],
-            temperature=0.2
+            temperature=0.2,
         )
         return response['choices'][0]['message']['content']
     except Exception as e:
-        st.error(f"❌ Error communicating with Mistral LLM: {e}")
-        return "Sorry, I couldn't get an answer from the AI model."
+        st.error(f"❌ LLM communication error: {e}")
+        return "⚠️ Sorry, no answer available."
+
+# === Initialize collection ===
+collection = load_or_create_collection()
 
 # === Streamlit UI ===
-st.set_page_config(page_title="Institution Chatbot", page_icon="🎓")
+st.set_page_config(page_title="🎓 Institution Chatbot", page_icon="🎓")
 st.title("🎓 Institution Info Chatbot")
-st.markdown("Ask me anything about colleges, courses, placement, etc!")
+st.markdown("Ask me anything about colleges, courses, placements, and more!")
 
-user_input = st.text_input("🔎 Ask a question:")
+user_query = st.text_input("🔎 Ask your question:")
 
-if user_input:
+if user_query:
     if not openai.api_key:
-        st.error("⚠️ Please set the OPENAI_API_KEY in Streamlit secrets.")
+        st.error("⚠️ OPENAI_API_KEY is missing in secrets.")
     elif not collection:
-        st.error("⚠️ ChromaDB collection not initialized or empty.")
-    elif not embedder:
-        st.error("⚠️ Embedding model not loaded.")
+        st.error("⚠️ ChromaDB collection unavailable.")
     else:
         with st.spinner("Fetching answer..."):
-            context_chunks = get_chunks(user_input, k=4)
+            context_chunks = retrieve_relevant_chunks(user_query, k=4)
+
             if context_chunks:
                 combined_context = "\n\n".join(context_chunks)
-                answer = ask_mistral(user_input, combined_context)
+                answer = ask_mistral_llm(user_query, combined_context)
 
                 st.markdown("### ✅ Answer")
-                st.write(answer)
+                st.success(answer)
 
                 with st.expander("📄 Source Context"):
-                    for i, chunk in enumerate(context_chunks):
-                        st.markdown(f"**Chunk {i+1}:**\n{chunk}")
+                    for idx, chunk in enumerate(context_chunks):
+                        st.markdown(f"**Chunk {idx+1}:**\n{chunk}")
             else:
-                st.warning("No relevant information found in the knowledge base.")
+                st.warning("⚠️ No relevant information found.")
