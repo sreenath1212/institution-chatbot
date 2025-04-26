@@ -2,4 +2,4 @@ streamlit
 chromadb
 sentence-transformers
 openai
-pysqlite3
+sqlite3 
